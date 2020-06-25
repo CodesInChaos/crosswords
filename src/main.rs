@@ -77,15 +77,19 @@ enum FieldEx {
 }
 
 #[derive(Clone)]
-struct State<'p> {
-    problem: &'p Problem,
-    fields: Vec<Field>,
+struct Counts {
     number: usize,
     accross_used: usize,
     down_used: usize,
     reverse_number: usize,
     reverse_accross_used: usize,
     reverse_down_used: usize,
+}
+
+struct State<'p> {
+    problem: &'p Problem,
+    fields: Vec<Field>,
+    counts: Vec<Counts>,
 }
 
 struct Scan<'s> {
@@ -158,18 +162,20 @@ impl<'p> State<'p> {
         State {
             problem: problem,
             fields: Vec::<_>::new(),
-            number: 1,
-            accross_used: 0,
-            down_used: 0,
-            reverse_number: problem
-                .accross
-                .iter()
-                .chain(problem.down.iter())
-                .copied()
-                .max()
-                .unwrap(),
-            reverse_down_used: 0,
-            reverse_accross_used: 0,
+            counts: vec![Counts {
+                number: 1,
+                accross_used: 0,
+                down_used: 0,
+                reverse_number: problem
+                    .accross
+                    .iter()
+                    .chain(problem.down.iter())
+                    .copied()
+                    .max()
+                    .unwrap(),
+                reverse_down_used: 0,
+                reverse_accross_used: 0,
+            }],
         }
     }
 
@@ -202,6 +208,7 @@ impl<'p> State<'p> {
             assert!(field == expected);
         }
         self.fields.push(field);
+        let mut counts = self.counts.last().unwrap().clone();
 
         match field {
             Field::White => {
@@ -211,12 +218,13 @@ impl<'p> State<'p> {
 
                     // check for correct number
                     numbered = true;
-                    if self.problem.accross.get(self.accross_used).copied() != Some(self.number) {
+                    if self.problem.accross.get(counts.accross_used).copied() != Some(counts.number)
+                    {
                         return Err(RuleViolation::NumberWrongAccross);
                     }
 
                     // newly started word has enough space to the right to fit the minimum word length
-                    self.accross_used += 1;
+                    counts.accross_used += 1;
                     if problem.size.0 as isize - position.0 < MINIMUM_WORD_LENGTH as isize {
                         return Err(RuleViolation::TooLittleSpaceAccross);
                     }
@@ -226,12 +234,12 @@ impl<'p> State<'p> {
 
                     // check for correct number
                     numbered = true;
-                    if self.problem.down.get(self.down_used).copied() != Some(self.number) {
+                    if self.problem.down.get(counts.down_used).copied() != Some(counts.number) {
                         return Err(RuleViolation::NumberWrongDown);
                     }
 
                     // newly started word has enough space below to fit the minimum word length
-                    self.down_used += 1;
+                    counts.down_used += 1;
                     let down_white = self
                         .scan(position, (0, 1))
                         .take(MINIMUM_WORD_LENGTH)
@@ -244,7 +252,7 @@ impl<'p> State<'p> {
                     }
                 }
                 if numbered {
-                    self.number += 1;
+                    counts.number += 1;
                 }
             }
             Field::Black => {
@@ -287,13 +295,13 @@ impl<'p> State<'p> {
                 if self
                     .problem
                     .down
-                    .get(self.problem.down.len() - 1 - self.reverse_down_used)
+                    .get(problem.down.len() - 1 - counts.reverse_down_used)
                     .copied()
-                    != Some(self.reverse_number)
+                    != Some(counts.reverse_number)
                 {
                     return Err(RuleViolation::NumberWrongDownReverse);
                 }
-                self.reverse_down_used += 1;
+                counts.reverse_down_used += 1;
             }
             if self.at((position.0 + 1, position.1)) == Field::Black {
                 // starts a new "down" word (reversed)
@@ -303,30 +311,31 @@ impl<'p> State<'p> {
                 if self
                     .problem
                     .accross
-                    .get(self.problem.accross.len() - 1 - self.reverse_accross_used)
+                    .get(problem.accross.len() - 1 - counts.reverse_accross_used)
                     .copied()
-                    != Some(self.reverse_number)
+                    != Some(counts.reverse_number)
                 {
                     return Err(RuleViolation::NumberWrongAccrossReverse);
                 }
-                self.reverse_accross_used += 1;
+                counts.reverse_accross_used += 1;
             }
             if numbered {
-                self.reverse_number -= 1;
+                counts.reverse_number -= 1;
             }
         }
 
         // once the board is filled, we must have used up all numbers
         if self.fields.len() == problem.field_count() {
-            if self.accross_used != problem.accross.len() {
+            if counts.accross_used != problem.accross.len() {
                 return Err(RuleViolation::LeftOverAccross);
             }
 
-            if self.down_used != problem.down.len() {
+            if counts.down_used != problem.down.len() {
                 return Err(RuleViolation::LeftOverDown);
             }
         }
 
+        self.counts.push(counts);
         Ok(())
     }
 }
@@ -352,32 +361,27 @@ impl<'p> Debug for State<'p> {
     }
 }
 
-struct SearchState<'p> {
+struct SearchState {
     start: Instant,
-    state_cache: Vec<State<'p>>,
     solution_count: u64,
     error_count: u64,
 }
 
-fn search<'p>(state: &State<'p>, search_state: &mut SearchState<'p>) {
+fn search<'p>(state: &mut State<'p>, search_state: &mut SearchState) {
+    let len = state.fields.len();
     for field in [Field::White, Field::Black].iter() {
-        let mut new_state = search_state
-            .state_cache
-            .pop()
-            .unwrap_or_else(|| State::new(state.problem));
-        new_state.clone_from(state);
-        match new_state.push(*field) {
+        match state.push(*field) {
             Ok(_) => {
-                if new_state.is_final() {
+                if state.is_final() {
                     search_state.solution_count += 1;
-                    println!("{:?}", new_state);
+                    println!("{:?}", state);
                 } else {
-                    search(&new_state, search_state);
+                    search(state, search_state);
                 }
             }
             Err(error) => {
                 search_state.error_count += 1;
-                if search_state.error_count % 2_000_000 == 0 {
+                if search_state.error_count % 10_000_000 == 0 {
                     eprintln!(
                         "Solutions: {}, Elapsed: {}s, Errors: {}M, {:?}",
                         search_state.solution_count,
@@ -385,22 +389,24 @@ fn search<'p>(state: &State<'p>, search_state: &mut SearchState<'p>) {
                         search_state.error_count / 1_000_000,
                         error
                     );
-                    eprintln!("{:?}", new_state);
+                    eprintln!("{:?}", state);
                 }
             }
         }
-        search_state.state_cache.push(new_state);
+
+        state.fields.truncate(len);
+        state.counts.truncate(len + 1);
     }
 }
 
-fn search_problem<'p>(problem: &'p Problem) -> SearchState<'p> {
+fn search_problem<'p>(problem: &'p Problem) -> SearchState {
     let mut search_state = SearchState {
         start: Instant::now(),
         solution_count: 0,
         error_count: 0,
-        state_cache: Vec::new(),
     };
-    search(&State::new(problem), &mut search_state);
+    let mut state = State::new(problem);
+    search(&mut state, &mut search_state);
     search_state
 }
 
