@@ -7,6 +7,7 @@ const MINIMUM_WORD_LENGTH: usize = 3;
 struct Problem {
     name: String,
     size: (usize, usize),
+    field_count: usize,
     accross: Vec<usize>,
     down: Vec<usize>,
 }
@@ -46,6 +47,7 @@ impl Problem {
         Problem {
             name: name,
             size: size,
+            field_count: size.0 * size.1,
             accross: accross,
             down: down,
         }
@@ -59,7 +61,7 @@ impl Problem {
     }
 
     fn field_count(&self) -> usize {
-        self.size.0 * self.size.1
+        self.field_count
     }
 }
 
@@ -125,21 +127,25 @@ enum RuleViolation {
 
 impl<'p> State<'p> {
     fn is_final(&self) -> bool {
-        self.fields.len() == self.problem.size.0 * self.problem.size.1
+        self.fields.len() == self.problem.field_count()
+    }
+
+    fn try_at_index(&self, mut index: isize) -> FieldEx {
+        let field_count = self.problem.field_count() as isize;
+        if index > field_count / 2 {
+            index = field_count - 1 - index;
+        }
+        self.fields
+            .get(index as usize)
+            .map_or(FieldEx::Unfilled, |f| FieldEx::Field(*f))
     }
 
     fn try_at(&self, position: (isize, isize)) -> FieldEx {
         if !self.problem.in_bounds(position) {
             return FieldEx::OutOfBounds;
         }
-        let field_count = self.problem.field_count();
-        let mut index = (position.1 * self.problem.size.0 as isize + position.0) as usize;
-        if index > field_count / 2 {
-            index = field_count - 1 - index;
-        }
-        self.fields
-            .get(index)
-            .map_or(FieldEx::Unfilled, |f| FieldEx::Field(*f))
+        let index = position.1 * self.problem.size.0 as isize + position.0;
+        self.try_at_index(index)
     }
 
     fn at(&self, position: (isize, isize)) -> Field {
